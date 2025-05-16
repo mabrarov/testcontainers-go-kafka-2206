@@ -11,11 +11,10 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/kafka"
 )
 
 var (
-	imageFlag       = flag.String("image", "confluentinc/confluent-local:7.5.0", "image with Kafka")
+	imageFlag       = flag.String("image", "bitnami/kafka:4.0", "image with Kafka")
 	stopTimeoutFlag = flag.Duration("timeout", 5*time.Minute, "Kafka stop timeout")
 	tailFlag        = flag.Int("tail", 10, "number of last log lines of Kafka container to output")
 )
@@ -29,7 +28,7 @@ func TestKafkaContainerStop(t *testing.T) {
 
 	ctx := context.Background()
 	t.Logf("creating and starting container from image %q", image)
-	container, err := kafka.Run(ctx, image)
+	container, err := Run(ctx, image)
 	testcontainers.CleanupContainer(t, container, testcontainers.StopTimeout(0))
 	if err != nil {
 		t.Fatalf("container start failed: %s", err)
