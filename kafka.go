@@ -21,12 +21,20 @@ const (
 	localLocalhostPort   = 9096
 	starterScript        = "/usr/sbin/testcontainers_start.sh"
 	starterScriptContent = `#!/bin/bash
+# For bitnami/kafka image
 export KAFKA_CFG_ADVERTISED_LISTENERS='PLAINTEXT_PUBLIC://%[6]s:%[8]d,PLAINTEXT_INTERNAL://%[7]s:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
-export KAFKA_LISTENERS='CONTROLLER://:%[2]d,PLAINTEXT_PUBLIC://:%[3]d,PLAINTEXT_INTERNAL://:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
 export KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP='CONTROLLER:PLAINTEXT,PLAINTEXT_PUBLIC:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_LOCALHOST:PLAINTEXT'
-export KAFKA_CONTROLLER_QUORUM_VOTERS='0@localhost:%[2]d'
 export KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
 export KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_LOCALHOST
+# For apache/kafka and apache/kafka-native images (https://github.com/apache/kafka/blob/trunk/docker/examples/README.md#single-node)
+export KAFKA_ADVERTISED_LISTENERS='PLAINTEXT_PUBLIC://%[6]s:%[8]d,PLAINTEXT_INTERNAL://%[7]s:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
+export KAFKA_LISTENER_SECURITY_PROTOCOL_MAP='CONTROLLER:PLAINTEXT,PLAINTEXT_PUBLIC:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_LOCALHOST:PLAINTEXT'
+export KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+export KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_LOCALHOST
+# For bitnami/kafka, apache/kafka and apache/kafka-native images
+export KAFKA_LISTENERS='CONTROLLER://:%[2]d,PLAINTEXT_PUBLIC://:%[3]d,PLAINTEXT_INTERNAL://:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
+export KAFKA_CONTROLLER_QUORUM_VOTERS='0@localhost:%[2]d'
+# Run original container entrypoint and command
 exec %[1]s
 `
 )
@@ -52,8 +60,13 @@ func RunKafka(ctx context.Context, img string, opts ...testcontainers.ContainerC
 		Image:        img,
 		ExposedPorts: []string{string(publicPort)},
 		Env: map[string]string{
+			// For bitnami/kafka image
 			"KAFKA_CFG_NODE_ID":       "0",
 			"KAFKA_CFG_PROCESS_ROLES": "controller,broker",
+			// For apache/kafka and apache/kafka-native images (https://github.com/apache/kafka/blob/trunk/docker/examples/README.md#single-node)
+			"KAFKA_NODE_ID":                          "0",
+			"KAFKA_PROCESS_ROLES":                    "controller,broker",
+			"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
 		},
 		Entrypoint: []string{"sh"},
 		Cmd:        []string{"-c", fmt.Sprintf("while [ ! -f %[1]q ]; do sleep 0.1; done; exec %[1]q", starterScript)},
@@ -147,8 +160,10 @@ func copyStarterScript(ctx context.Context, dockerProvider *testcontainers.Docke
 	if err != nil {
 		return fmt.Errorf("image inspect: %w", err)
 	}
+	containerCmd := buildContainerCmd(imageInspect.Config)
+
 	scriptContent := fmt.Sprintf(starterScriptContent,
-		buildContainerCmd(imageInspect.Config),
+		containerCmd,
 		localControllerPort,
 		localPublicPort,
 		localInternalPort,
