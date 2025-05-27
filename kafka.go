@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/log"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -16,17 +19,15 @@ const (
 	localPublicPort      = 9093
 	localInternalPort    = 9095
 	localLocalhostPort   = 9096
-	originalEntrypoint   = "/opt/bitnami/scripts/kafka/entrypoint.sh"
-	originalCmd          = "/opt/bitnami/scripts/kafka/run.sh"
 	starterScript        = "/usr/sbin/testcontainers_start.sh"
 	starterScriptContent = `#!/bin/bash
-export KAFKA_CFG_ADVERTISED_LISTENERS='PLAINTEXT_PUBLIC://%[7]s:%[9]d,PLAINTEXT_INTERNAL://%[8]s:%[5]d,PLAINTEXT_LOCALHOST://localhost:%[6]d'
-export KAFKA_LISTENERS='CONTROLLER://:%[3]d,PLAINTEXT_PUBLIC://:%[4]d,PLAINTEXT_INTERNAL://:%[5]d,PLAINTEXT_LOCALHOST://localhost:%[6]d'
+export KAFKA_CFG_ADVERTISED_LISTENERS='PLAINTEXT_PUBLIC://%[6]s:%[8]d,PLAINTEXT_INTERNAL://%[7]s:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
+export KAFKA_LISTENERS='CONTROLLER://:%[2]d,PLAINTEXT_PUBLIC://:%[3]d,PLAINTEXT_INTERNAL://:%[4]d,PLAINTEXT_LOCALHOST://localhost:%[5]d'
 export KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP='CONTROLLER:PLAINTEXT,PLAINTEXT_PUBLIC:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_LOCALHOST:PLAINTEXT'
-export KAFKA_CONTROLLER_QUORUM_VOTERS='0@localhost:%[3]d'
+export KAFKA_CONTROLLER_QUORUM_VOTERS='0@localhost:%[2]d'
 export KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
 export KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_LOCALHOST
-exec %[1]q %[2]q
+exec %[1]s
 `
 )
 
@@ -35,11 +36,16 @@ type KafkaContainer struct {
 	testcontainers.Container
 }
 
-// Run creates an instance of the Kafka container type
-func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KafkaContainer, error) {
+// RunKafka creates an instance of the Kafka container type
+func RunKafka(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KafkaContainer, error) {
 	publicPort, err := nat.NewPort("tcp", strconv.Itoa(localPublicPort))
 	if err != nil {
 		return nil, fmt.Errorf("nat.NewPort: %w", err)
+	}
+
+	dockerProvider, err := getDockerProvider(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("getDockerProvider: %w", err)
 	}
 
 	req := testcontainers.ContainerRequest{
@@ -55,7 +61,7 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 			{
 				PostStarts: []testcontainers.ContainerHook{
 					func(ctx context.Context, c testcontainers.Container) error {
-						if err := copyStarterScript(ctx, c, publicPort); err != nil {
+						if err := copyStarterScript(ctx, dockerProvider, c, publicPort); err != nil {
 							return fmt.Errorf("copy starter script: %w", err)
 						}
 						return wait.
@@ -93,8 +99,33 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 	return c, nil
 }
 
+func getDockerProvider(opts ...testcontainers.ContainerCustomizer) (*testcontainers.DockerProvider, error) {
+	// Use a dummy request to get the provider from options.
+	var req testcontainers.GenericContainerRequest
+	for _, opt := range opts {
+		if err := opt.Customize(&req); err != nil {
+			return nil, err
+		}
+	}
+
+	logging := req.Logger
+	if logging == nil {
+		logging = log.Default()
+	}
+	genericProvider, err := req.ProviderType.GetProvider(testcontainers.WithLogger(logging))
+	if err != nil {
+		return nil, fmt.Errorf("get provider: %w", err)
+	}
+
+	if dockerProvider, ok := genericProvider.(*testcontainers.DockerProvider); ok {
+		return dockerProvider, nil
+	}
+
+	return nil, fmt.Errorf("unknown provider type: %T", genericProvider)
+}
+
 // copyStarterScript copies the starter script into the container.
-func copyStarterScript(ctx context.Context, c testcontainers.Container, localPort nat.Port) error {
+func copyStarterScript(ctx context.Context, dockerProvider *testcontainers.DockerProvider, c testcontainers.Container, localPort nat.Port) error {
 	port, err := waitForMappedPort(ctx, c, localPort, time.Minute, 100*time.Millisecond)
 	if err != nil {
 		return fmt.Errorf("mapped port: %w", err)
@@ -112,9 +143,12 @@ func copyStarterScript(ctx context.Context, c testcontainers.Container, localPor
 
 	hostname := inspect.Config.Hostname
 
+	imageInspect, err := dockerProvider.Client().ImageInspect(ctx, inspect.Image)
+	if err != nil {
+		return fmt.Errorf("image inspect: %w", err)
+	}
 	scriptContent := fmt.Sprintf(starterScriptContent,
-		originalEntrypoint,
-		originalCmd,
+		buildContainerCmd(imageInspect.Config),
 		localControllerPort,
 		localPublicPort,
 		localInternalPort,
@@ -128,6 +162,14 @@ func copyStarterScript(ctx context.Context, c testcontainers.Container, localPor
 	}
 
 	return nil
+}
+
+func buildContainerCmd(config *dockercontainer.Config) string {
+	entry := append(config.Entrypoint, config.Cmd...)
+	for i, cmd := range entry {
+		entry[i] = strconv.Quote(cmd)
+	}
+	return strings.Join(entry, " ")
 }
 
 func waitForMappedPort(ctx context.Context, c testcontainers.Container, localPort nat.Port, timeout, interval time.Duration) (nat.Port, error) {

@@ -28,7 +28,7 @@ func TestKafkaContainerStop(t *testing.T) {
 
 	ctx := context.Background()
 	t.Logf("creating and starting container from image %q", image)
-	container, err := Run(ctx, image)
+	container, err := RunKafka(ctx, image)
 	testcontainers.CleanupContainer(t, container, testcontainers.StopTimeout(0))
 	if err != nil {
 		t.Fatalf("container start failed: %s", err)
