@@ -5,12 +5,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/testcontainers/testcontainers-go"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
 )
 
@@ -30,6 +30,7 @@ func TestKafkaContainerStop(t *testing.T) {
 	ctx := context.Background()
 	t.Logf("creating and starting container from image %q", image)
 	container, err := kafka.Run(ctx, image)
+	testcontainers.CleanupContainer(t, container, testcontainers.StopTimeout(0))
 	if err != nil {
 		t.Fatalf("container start failed: %s", err)
 	}
